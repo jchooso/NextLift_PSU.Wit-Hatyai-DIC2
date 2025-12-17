@@ -11,6 +11,7 @@ MAX_CAPACITY = 6
 CONF_THRESHOLD = 0.5
 LARGE_PERSON_AREA_THRESHOLD = 2000
 SEQUENCE_LENGTH = 10
+SKIP_FRAMES = 3 
 
 status_buffer = deque(maxlen=SEQUENCE_LENGTH)
 
@@ -28,6 +29,9 @@ if not cap1.isOpened() or not cap2.isOpened():
     sys.exit()
 
 print("Starting System...")
+
+frame_counter = 0
+cached_boxes = None
 
 while True:
     ret1, frame1 = cap1.read()
@@ -56,7 +60,9 @@ while True:
         h - roi_margin_y
     )
 
-    results = model(frame, verbose=False)
+    if frame_counter % SKIP_FRAMES == 0:
+        results = model(frame, verbose=False, imgsz=640)
+        cached_boxes = results[0].boxes
 
     current_frame_count = 0
     waiting_count = 0
@@ -66,32 +72,33 @@ while True:
     cv2.putText(frame, "WAITING ZONE", (WAITING_ZONE_X_START + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
     cv2.rectangle(frame, (COUNTING_ROI_RECT[0], COUNTING_ROI_RECT[1]), (COUNTING_ROI_RECT[2], COUNTING_ROI_RECT[3]), (0, 0, 255), 1)
 
-    for box in results[0].boxes:
-        if int(box.cls[0]) == 0 and box.conf[0] >= CONF_THRESHOLD:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            center_x = (x1 + x2) // 2
-            center_y = (y1 + y2) // 2
+    if cached_boxes is not None:
+        for box in cached_boxes:
+            if int(box.cls[0]) == 0 and box.conf[0] >= CONF_THRESHOLD:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                center_x = (x1 + x2) // 2
+                center_y = (y1 + y2) // 2
 
-            if center_x < CABIN_ZONE_X_END:
-                if (COUNTING_ROI_RECT[0] < center_x < COUNTING_ROI_RECT[2]) and \
-                   (COUNTING_ROI_RECT[1] < center_y < COUNTING_ROI_RECT[3]):
-                    
-                    bbox_area = (x2 - x1) * (y2 - y1)
-                    person_value = 1
-                    color = (0, 255, 0)
+                if center_x < CABIN_ZONE_X_END:
+                    if (COUNTING_ROI_RECT[0] < center_x < COUNTING_ROI_RECT[2]) and \
+                       (COUNTING_ROI_RECT[1] < center_y < COUNTING_ROI_RECT[3]):
+                        
+                        bbox_area = (x2 - x1) * (y2 - y1)
+                        person_value = 1
+                        color = (0, 255, 0)
 
-                    if bbox_area > LARGE_PERSON_AREA_THRESHOLD:
-                        person_value = 2
-                        color = (0, 0, 255)
-                    
-                    current_frame_count += person_value
+                        if bbox_area > LARGE_PERSON_AREA_THRESHOLD:
+                            person_value = 2
+                            color = (0, 0, 255)
+                        
+                        current_frame_count += person_value
 
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(frame, f"Val:{person_value}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                        cv2.putText(frame, f"Val:{person_value}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            elif center_x > WAITING_ZONE_X_START:
-                waiting_count += 1
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                elif center_x > WAITING_ZONE_X_START:
+                    waiting_count += 1
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
     if current_frame_count >= MAX_CAPACITY:
         raw_status = "Full"
@@ -144,6 +151,8 @@ while True:
     combined_frame = np.vstack((frame, display_panel))
 
     cv2.imshow("Elevator Watch System", combined_frame)
+
+    frame_counter += 1
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
